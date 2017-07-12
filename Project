@@ -1,0 +1,322 @@
+//These are all the things we need for the diffent parts
+
+
+//This is for the accelormitor 
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_LSM303_U.h>
+
+//This is for the eeprom 
+#include <EEPROM.h>
+
+
+//Timer interupt
+#include <TimerOne.h> // Header file for TimerOne library
+#include <avr/interrupt.h>
+
+//GPS module
+#include <Adafruit_GPS.h>
+#include <SoftwareSerial.h>
+
+//LED on the Flora
+/* Assign a unique ID to this sensor at the same time */
+Adafruit_LSM303_Accel_Unified accel = Adafruit_LSM303_Accel_Unified(54321);
+#include <Adafruit_NeoPixel.h>
+
+//This is for the LED pin
+#define PIN 8
+ 
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(1, PIN, NEO_GRB + NEO_KHZ800);
+
+
+
+
+int stepCnt=EEPROM.read(0);
+int oldData;
+int RED = 0;
+int BLUE = 300;
+int GREEN = 510;
+int button = 6;
+int LED = 7;
+int LEDStatuse = LOW;
+
+
+#define TIMER_US 2000000 
+
+
+
+// If using hardware serial, comment
+// out the above two lines and enable these two lines instead:
+Adafruit_GPS GPS(&Serial1);
+HardwareSerial mySerial = Serial1;
+
+// Set GPSECHO to 'false' to turn off echoing the GPS data to the Serial console
+// Set to 'true' if you want to debug and listen to the raw GPS sentences
+#define GPSECHO  false
+// this keeps track of whether we're using the interrupt
+// off by default!
+boolean usingInterrupt = false;
+void useInterrupt(boolean); // Func prototype keeps Arduino 0023 happy
+
+
+void setup()
+{
+
+//Set it up so that the button is an input
+pinMode(button, INPUT);
+
+//Setu up for the timer ISR
+ Timer1.initialize(TIMER_US); // Initialise timer 1
+ Timer1.attachInterrupt( timerIsr ); // attach the ISR routine here
+
+ 
+  Serial.begin(115200);
+  /* Initialise the sensorn if you cant get to it this tells us that there is a problem
+  */
+  if(!accel.begin())
+  {
+    /* There was a problem detecting the ADXL345 ... check your connections */
+    Serial.println("Ooops, no LSM303 detected ... Check your wiring!");
+    while(1);
+  }
+
+  /* Display some basic information on this sensor 
+    accelrometer stuffs
+  */
+
+//this is what we will be judging agenst for the mostion. We set it here so that we can compare agenst it. 
+  oldData=accel.raw.x;
+
+
+  
+  //LED stuffs 
+  strip.begin();
+  strip.show(); // Initialize all pixels to 'off'
+
+// GPS stuffs
+
+  Serial.println("Adafruit GPS logging start test!");
+  // 9600 NMEA is the default baud rate for MTK - some use 4800
+  GPS.begin(9600);
+  
+  // You can adjust which sentences to have the module emit, below
+  // Default is RMC + GGA
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
+  // Default is 1 Hz update rate
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+
+  // the nice thing about this code is you can have a timer0 interrupt go off
+  // every 1 millisecond, and read data from the GPS for you. that makes the
+  // loop code a heck of a lot easier!
+  useInterrupt(true);
+
+  while (true) {
+    Serial.print("Starting logging....");
+    if (GPS.LOCUS_StartLogger()) {
+      Serial.println(" STARTED!");
+      break;
+    } else {
+      Serial.println(" no response :(");
+    }
+  }
+
+  
+}
+
+
+uint32_t updateTime = 1000;
+
+void loop(void)
+{
+  //LED stuffs
+  colorWipe(strip.Color(RED, GREEN, BLUE), 5); // Red
+  /* Get a new sensor event */
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+
+/*
+ * This is the loop for the data. It takes the data from the acceloromiter and compares it to old dtat. If it is more than a certain value 
+ * count it as a step.
+ * 
+ * 
+ */
+  noInterrupts(); // Disable interrupts
+  if(abs(oldData- accel.raw.x)>=450)
+  {
+    oldData = accel.raw.x;
+    stepCnt += 1;
+    Serial.println("step added by one");
+    ChangeColor();
+
+    // This is what happeneds when you press the button to reset evryting.
+    if(digitalRead(button) == LOW)
+    {
+      EEPROM.write(0,0);
+      stepCnt=0;
+      delay(500);
+      Serial.println("BUTTON");
+    }
+  }
+  interrupts(); // Enable interrupts
+
+
+
+  /* Delay before the next sample */
+  char c = GPS.read();
+  // if you want to debug, this is a good time to do it!
+  if ((c) && (GPSECHO))
+    Serial.write(c); 
+    
+  if (millis() > updateTime)
+  {
+    updateTime = millis() + 1000;
+    if (GPS.LOCUS_ReadStatus()) {
+       Serial.print("\n\nLog #"); 
+       Serial.print(GPS.LOCUS_serial, DEC);
+      if (GPS.LOCUS_type == LOCUS_OVERLAP)
+        Serial.print(", Overlap, ");
+      else if (GPS.LOCUS_type == LOCUS_FULLSTOP)
+        Serial.print(", Full Stop, Logging");
+     
+      if (GPS.LOCUS_mode & 0x1) Serial.print(" AlwaysLocate");
+      if (GPS.LOCUS_mode & 0x2) Serial.print(" FixOnly");
+      if (GPS.LOCUS_mode & 0x4) Serial.print(" Normal");
+      if (GPS.LOCUS_mode & 0x8) Serial.print(" Interval");
+      if (GPS.LOCUS_mode & 0x10) Serial.print(" Distance");
+      if (GPS.LOCUS_mode & 0x20) Serial.print(" Speed");
+      
+      Serial.print(", Content "); Serial.print((int)GPS.LOCUS_config);
+      Serial.print(", Interval "); Serial.print((int)GPS.LOCUS_interval);
+      Serial.print(" sec, Distance "); Serial.print((int)GPS.LOCUS_distance);
+      Serial.print(" m, Speed "); Serial.print((int)GPS.LOCUS_speed);
+      Serial.print(" m/s, Status "); 
+      if (GPS.LOCUS_status) 
+        Serial.print("LOGGING, ");
+      else 
+        Serial.print("OFF, ");
+      Serial.print((int)GPS.LOCUS_records); Serial.print(" Records, ");
+      Serial.print((int)GPS.LOCUS_percent); Serial.print("% Used "); 
+  
+    }//if (GPS.LOCUS_ReadStatus())
+  }//if (millis() > updateTime)
+
+
+
+  
+  delay(120);
+
+
+}
+// Fill the dots one after the other with a color
+void colorWipe(uint32_t c, uint8_t wait) {
+  for(uint16_t i=0; i<strip.numPixels(); i++) {
+      strip.setPixelColor(i, c);
+        strip.show();
+  }
+}
+ 
+
+// This is where the color changes when the more you step. This could be clened up much more.
+void ChangeColor()
+{
+  //to change when the color changes you just change the number you are comparing to the setpCnt. To change the color it shows you change the RED, GREEN, and BLUE
+  if (stepCnt <= 10)  // 1000
+  {
+    RED=200;
+    GREEN=0;
+    BLUE=0;
+  }
+  else if (stepCnt <= 25)   // 3000
+    {
+    RED=0;
+    GREEN=200;
+    BLUE=0;
+  }
+ else if (stepCnt <= 500)    // 5000
+    {
+    RED=0;
+    GREEN=0;
+    BLUE=200;
+  }
+   else if (stepCnt <= 1000)    // 5000
+    {
+    RED=200;
+    GREEN=0;
+    BLUE=200;
+  }
+   else if (stepCnt <= 1500)    // 5000
+    {
+    RED=150;
+    GREEN=0;
+    BLUE=150;
+  }
+   else if (stepCnt <= 2000)    // 5000
+    {
+    RED=0;
+    GREEN=200;
+    BLUE=200;
+  }
+   else if (stepCnt <= 2500)    // 5000
+    {
+    RED=0;
+    GREEN=150;
+    BLUE=150;
+  }
+   else if (stepCnt <=3000)    // 5000
+    {
+    RED=200;
+    GREEN=200;
+    BLUE=0;
+  }
+}
+
+/******************************************************************/
+// Interrupt is called once a millisecond, looks for any new GPS data, and stores it
+SIGNAL(TIMER0_COMPA_vect) 
+{
+  char c = GPS.read();
+  // if you want to debug, this is a good time to do it!
+  if (GPSECHO && c) {
+#ifdef UDR0
+    UDR0 = c;  
+    // writing direct to UDR0 is much much faster than Serial.print 
+    // but only one character can be written at a time. 
+#endif
+  }
+}
+
+
+void useInterrupt(boolean v) {
+  if (v) {
+    // Timer0 is already used for millis() - we'll just interrupt somewhere
+    // in the middle and call the "Compare A" function above
+    OCR0A = 0xAF;
+    TIMSK0 |= _BV(OCIE0A);
+    usingInterrupt = true;
+  } else {
+    // do not call the interrupt function COMPA anymore
+    TIMSK0 &= ~_BV(OCIE0A);
+    usingInterrupt = false;
+  }
+}
+
+
+// --------------------------
+
+// Called every time the hardware timer 1 times out.
+// --------------------------
+
+//This updates the EEPROM. EEPROMs only have so many writes. This is why we only write to it evry so offetn
+void timerIsr()
+{
+  
+  Serial.println(stepCnt);
+  Serial.print("Timer");
+  EEPROM.write(0, stepCnt);
+  digitalWrite(LED, LEDStatuse);
+  LEDStatuse = !LEDStatuse;
+  
+
+
+}
